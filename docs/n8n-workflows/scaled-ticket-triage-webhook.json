@@ -1,0 +1,437 @@
+{
+  "name": "Advanced Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🚀 Advanced Webhook — Scaled Event-Driven Ticket Triage (NoéMI Accelerator 3)\n- **1. Batch Handling:** `Webhook` (`POST /webhook/practitioner-advanced`) + `Split Batch` unpacks incoming event bursts (`body.events` array).\n- **2. Data Cleaning & Validation:** `Clean & Normalize Data` trims/normalizes fields (`ticket_id`, `customer_name`, `priority`) before `Validate Data` filters incomplete items to `Log Invalid Item`.\n- **3. External API & Resilience (`resilience_helpers.js`):** `External API (Enrich)` calls external enrichment with exponential backoff retry (`maxTries: 3`) + `continueOnFail` error routing to `Log API Error`.\n- **4. Multi-Destination Fan-out:** Valid enriched items are formatted in `Clean Data` and dispatched in parallel to `Dest 1: DB Log` and `Dest 2: Email API`.",
+        "height": 170,
+        "width": 1480,
+        "color": 5
+      },
+      "id": "e1000001-1111-4111-8111-000000000001",
+      "name": "Architecture Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1136,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "practitioner-advanced",
+        "options": {}
+      },
+      "id": "49ebe9db-7dff-48ce-a11f-8ab0004d9caa",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -1136,
+        496
+      ],
+      "webhookId": "580a0248-cc3c-4bc7-a595-3592ab9b386b"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "body.events",
+        "options": {}
+      },
+      "id": "04c624c0-e2a1-423c-919c-2a05f31964e9",
+      "name": "Split Batch",
+      "type": "n8n-nodes-base.itemLists",
+      "typeVersion": 1,
+      "position": [
+        -944,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const raw = $input.item.json;\nconst clean = (val) => (typeof val === 'string' ? val.replace(/\\s+/g, ' ').trim() : '');\n\nconst ticket_id = clean(raw.ticket_id).toUpperCase();\nconst customer_name = clean(raw.customer_name || raw.customer) || 'Unknown Customer';\nconst rawPriority = clean(raw.priority).toLowerCase();\nconst priority = ['high', 'medium', 'low', 'critical'].includes(rawPriority) ? rawPriority : 'normal';\nconst simulate_error = Boolean(raw.simulate_error);\n\nconst missing_fields = [];\nif (!ticket_id) missing_fields.push('ticket_id');\nif (!clean(raw.customer_name || raw.customer)) missing_fields.push('customer_name');\n\nreturn {\n  json: {\n    ticket_id,\n    customer_name,\n    priority,\n    simulate_error,\n    is_valid: missing_fields.length === 0,\n    missing_fields,\n    cleaned_at: new Date().toISOString()\n  }\n};"
+      },
+      "id": "b72e1102-3a91-4c22-9100-112233445566",
+      "name": "Clean & Normalize Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -752,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.ticket_id}}",
+              "operation": "isNotEmpty"
+            },
+            {
+              "value1": "={{$json.customer_name}}",
+              "operation": "notEqual",
+              "value2": "Unknown Customer"
+            }
+          ]
+        }
+      },
+      "id": "177e0b09-e3b5-40af-b1f2-9efb9e4e9621",
+      "name": "Validate Data",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -560,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            {
+              "name": "ErrorReason",
+              "value": "=Validation Failed: Missing required fields ({{ ($json.missing_fields || ['ticket_id']).join(', ') }})"
+            },
+            {
+              "name": "Status",
+              "value": "REJECTED_INVALID_PAYLOAD"
+            },
+            {
+              "name": "RawData",
+              "value": "={{JSON.stringify($json)}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "47b59ba5-42e9-4899-83e8-51e9cfc6d32c",
+      "name": "Log Invalid Item",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        -352,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.simulate_error ? 'https://httpbin.org/status/503' : 'https://httpbin.org/anything' }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "enrichment_id",
+              "value": "={{$json.ticket_id}}"
+            },
+            {
+              "name": "customer",
+              "value": "={{$json.customer_name}}"
+            },
+            {
+              "name": "priority",
+              "value": "={{$json.priority}}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "acf95d13-d3e7-4ac3-a283-da272346efc7",
+      "name": "External API (Enrich)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        -352,
+        304
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.error}}",
+              "operation": "isEmpty"
+            }
+          ]
+        }
+      },
+      "id": "a592e640-e0f0-4ebe-acd6-287ea3c10425",
+      "name": "Check API Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -144,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            {
+              "name": "ErrorReason",
+              "value": "External API Failed after exponential backoff retries (Külső szolgáltatás hibája)"
+            },
+            {
+              "name": "ResiliencePattern",
+              "value": "Exponential Backoff with Jitter (scripts/resilience_helpers.js: maxRetries=3, baseDelayMs=1000)"
+            },
+            {
+              "name": "AlertChannel",
+              "value": "#ops-incident-alerts"
+            },
+            {
+              "name": "ErrorDetails",
+              "value": "={{ typeof $json.error === 'object' ? JSON.stringify($json.error) : String($json.error || 'HTTP 503 Service Unavailable') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8b658440-b22e-4f10-af0f-ed945f2d5f47",
+      "name": "Log API Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        64,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            {
+              "name": "FinalTicketID",
+              "value": "={{$json.args.enrichment_id}}"
+            },
+            {
+              "name": "CustomerName",
+              "value": "={{$json.args.customer}}"
+            },
+            {
+              "name": "Priority",
+              "value": "={{$json.args.priority}}"
+            },
+            {
+              "name": "Status",
+              "value": "Enriched and Validated"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "996f37f4-0bcc-48f4-b013-8e13c8c2fcd2",
+      "name": "Clean Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        64,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://httpbin.org/post",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "destination",
+              "value": "Database Audit Table"
+            },
+            {
+              "name": "ticket_id",
+              "value": "={{$json.FinalTicketID}}"
+            },
+            {
+              "name": "customer_name",
+              "value": "={{$json.CustomerName}}"
+            },
+            {
+              "name": "priority",
+              "value": "={{$json.Priority}}"
+            },
+            {
+              "name": "message",
+              "value": "=Adatbázisba mentve: {{$json.FinalTicketID}} ({{$json.CustomerName}} - {{$json.Priority}})"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9b7bbe4b-1ddd-4bfc-a9dd-a71f44d7b4e0",
+      "name": "Dest 1: DB Log",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        288,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://httpbin.org/post",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "destination",
+              "value": "Email & Team Notification Service"
+            },
+            {
+              "name": "ticket_id",
+              "value": "={{$json.FinalTicketID}}"
+            },
+            {
+              "name": "customer_name",
+              "value": "={{$json.CustomerName}}"
+            },
+            {
+              "name": "priority",
+              "value": "={{$json.Priority}}"
+            },
+            {
+              "name": "message",
+              "value": "=Email értesítés kiküldve: {{$json.FinalTicketID}} ({{$json.CustomerName}} - {{$json.Priority}})"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ac45ccee-3947-4d74-806d-d479aac06374",
+      "name": "Dest 2: Email API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        288,
+        400
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Split Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Batch": {
+      "main": [
+        [
+          {
+            "node": "Clean & Normalize Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean & Normalize Data": {
+      "main": [
+        [
+          {
+            "node": "Validate Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Data": {
+      "main": [
+        [
+          {
+            "node": "External API (Enrich)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Invalid Item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "External API (Enrich)": {
+      "main": [
+        [
+          {
+            "node": "Check API Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check API Success": {
+      "main": [
+        [
+          {
+            "node": "Clean Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log API Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean Data": {
+      "main": [
+        [
+          {
+            "node": "Dest 1: DB Log",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Dest 2: Email API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "ac9eea79-2d73-4d9e-b188-48fb14d5fd00",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "REPLACE_WITH_YOUR_INSTANCE_ID"
+  },
+  "id": "8oEHrt5nHzIqm87l",
+  "tags": []
+}
